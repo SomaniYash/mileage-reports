@@ -238,16 +238,16 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with col2:
-            st.markdown("**👤 Per Staff**")
-            st.caption("One block per staff, members listed as rows")
-            per_staff_bytes = build_per_staff(records)
-            st.download_button(
-                label="⬇️ Download Per-Staff Report",
-                data=per_staff_bytes,
-                file_name="mileage_by_staff.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+        # with col2:
+        #     st.markdown("**👤 Per Staff**")
+        #     st.caption("One block per staff, members listed as rows")
+        #     per_staff_bytes = build_per_staff(records)
+        #     st.download_button(
+        #         label="⬇️ Download Per-Staff Report",
+        #         data=per_staff_bytes,
+        #         file_name="mileage_by_staff.xlsx",
+        #         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        #         use_container_width=True
+        #     )
 else:
     st.info("👆 Upload one or more CSV files to get started.")
