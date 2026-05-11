@@ -7,16 +7,13 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Mileage Report Generator", page_icon="🚗", layout="centered")
 
 st.title("🚗 Mileage Report Generator")
 st.markdown("Upload all your CSV mileage files below, choose a report type, and download the Excel summary.")
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def parse_csv_content(content: str):
-    """Parse a mileage CSV string and return a record dict."""
     lines = [l.rstrip() for l in content.strip().split("\n")]
     header_match = re.search(
         r"Name:\s*(.+?),\s*Member:\s*(.+?),\s*Month/Year:\s*(.+)", lines[0]
@@ -67,7 +64,6 @@ def make_styles():
 
 
 def build_per_member(records) -> bytes:
-    """Generate Excel grouped by Member."""
     members = defaultdict(list)
     for r in records:
         members[r["member"]].append(r)
@@ -85,12 +81,13 @@ def build_per_member(records) -> bytes:
     row_cursor = 1
     for idx, (member_name, staff_list) in enumerate(sorted(members.items()), start=1):
         num_staff = len(staff_list)
-        member_total_km = round(sum(s["total_km"] for s in staff_list), 2)
+        member_total_km      = round(sum(s["total_km"]      for s in staff_list), 2)
+        member_total_parking = round(sum(s["total_parking"] for s in staff_list), 2)
 
         ws.merge_cells(start_row=row_cursor, start_column=1,
                        end_row=row_cursor, end_column=1 + num_staff)
         cell = ws.cell(row=row_cursor, column=1,
-                       value=f"Member {idx}: {member_name}  —  {member_total_km} km")
+                       value=f"Member {idx}: {member_name}  —  {member_total_km} km  |  ${member_total_parking:.2f} parking")
         cell.font = header_font; cell.fill = member_fill
         cell.alignment = center; cell.border = border
         row_cursor += 1
@@ -128,7 +125,6 @@ def build_per_member(records) -> bytes:
 
 
 def build_per_staff(records) -> bytes:
-    """Generate Excel grouped by Staff."""
     staff_map = defaultdict(list)
     for r in records:
         staff_map[r["staff"]].append(r)
@@ -152,7 +148,7 @@ def build_per_staff(records) -> bytes:
         ws.merge_cells(start_row=row_cursor, start_column=1,
                        end_row=row_cursor, end_column=3)
         cell = ws.cell(row=row_cursor, column=1,
-                       value=f"Staff {idx}: {staff_name}  —  {staff_total_km} km")
+                       value=f"Staff {idx}: {staff_name}  —  {staff_total_km} km  |  ${staff_total_parking:.2f} parking")
         cell.font = header_font; cell.fill = staff_fill
         cell.alignment = center; cell.border = border
         row_cursor += 1
@@ -192,8 +188,6 @@ def build_per_staff(records) -> bytes:
     return buf.getvalue()
 
 
-# ── UI ─────────────────────────────────────────────────────────────────────────
-
 uploaded_files = st.file_uploader(
     "Drop your CSV mileage files here",
     type="csv",
@@ -215,7 +209,6 @@ if uploaded_files:
     if failed:
         st.warning(f"⚠️ Could not parse: {', '.join(failed)}")
 
-    # Preview table
     if records:
         df = pd.DataFrame(records)[["staff", "member", "month_year", "total_km", "total_parking"]]
         df.columns = ["Staff", "Member", "Month/Year", "Total KMs", "Parking ($)"]
