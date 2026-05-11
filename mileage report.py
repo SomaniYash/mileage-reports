@@ -7,8 +7,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-st.set_page_config(page_title="Mileage Report Generator", page_icon="🚗", layout="centered")
+# ── Global rate ────────────────────────────────────────────────────────────────
+KM_RATE = 0.55   # $ per km — change this value as needed
 
+# ── Page config ────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Mileage Report Generator", page_icon="🚗", layout="centered")
 st.title("🚗 Mileage Report Generator")
 st.markdown("Upload all your CSV mileage files below, choose a report type, and download the Excel summary.")
 
@@ -53,6 +56,12 @@ def parse_csv_content(content: str):
             "month_year": month_year,
             "total_km": round(total_km, 2),
             "total_parking": round(total_parking, 2)}
+
+
+def last_name_key(name: str) -> str:
+    """Return the last word of a name for sorting purposes."""
+    parts = name.strip().split()
+    return parts[-1].lower() if parts else name.lower()
 
 
 def make_styles():
@@ -133,33 +142,54 @@ def build_per_staff(records) -> bytes:
     ws = wb.active
     ws.title = "By Staff"
 
-    header_font = Font(bold=True, size=11, color="FFFFFF")
-    staff_fill  = PatternFill("solid", fgColor="2E5D9E")
-    col_fill    = PatternFill("solid", fgColor="4472C4")
-    label_fill  = PatternFill("solid", fgColor="D9E1F2")
-    data_fill   = PatternFill("solid", fgColor="EEF2FB")
+    header_font  = Font(bold=True, size=11, color="FFFFFF")
+    staff_fill   = PatternFill("solid", fgColor="2E5D9E")
+    col_fill     = PatternFill("solid", fgColor="4472C4")
+    label_fill   = PatternFill("solid", fgColor="D9E1F2")
+    data_fill    = PatternFill("solid", fgColor="EEF2FB")
+    total_fill   = PatternFill("solid", fgColor="BDD7EE")
+    grand_fill   = PatternFill("solid", fgColor="1F3864")
+    grand_font   = Font(bold=True, size=11, color="FFFFFF")
     border, center, left = make_styles()
 
+    # Sort staff by last name ascending
+    sorted_staff = sorted(staff_map.items(), key=lambda x: last_name_key(x[0]))
+
+    grand_total_km      = 0.0
+    grand_total_parking = 0.0
+    grand_total_amount  = 0.0
+
     row_cursor = 1
-    for idx, (staff_name, members) in enumerate(sorted(staff_map.items()), start=1):
+
+    for idx, (staff_name, members) in enumerate(sorted_staff, start=1):
         staff_total_km      = round(sum(m["total_km"]      for m in members), 2)
         staff_total_parking = round(sum(m["total_parking"] for m in members), 2)
+        staff_total_amount  = round((staff_total_km * KM_RATE) + staff_total_parking, 2)
 
+        grand_total_km      += staff_total_km
+        grand_total_parking += staff_total_parking
+        grand_total_amount  += staff_total_amount
+
+        # Staff header row
         ws.merge_cells(start_row=row_cursor, start_column=1,
-                       end_row=row_cursor, end_column=3)
+                       end_row=row_cursor, end_column=4)
         cell = ws.cell(row=row_cursor, column=1,
                        value=f"Staff {idx}: {staff_name}  —  {staff_total_km} km  |  ${staff_total_parking:.2f} parking")
         cell.font = header_font; cell.fill = staff_fill
         cell.alignment = center; cell.border = border
         row_cursor += 1
 
-        for col, h in enumerate(["Member", "Total KMs", "Parking Expense ($)"], start=1):
+        # Column headers: Member | Total KMs | Parking ($) | Amount ($)
+        for col, h in enumerate(["Member", "Total KMs", "Parking ($)", "Amount ($)"], start=1):
             c = ws.cell(row=row_cursor, column=col, value=h)
             c.font = Font(bold=True, size=10, color="FFFFFF")
             c.fill = col_fill; c.alignment = center; c.border = border
         row_cursor += 1
 
+        # One row per member
         for member in sorted(members, key=lambda x: x["member"]):
+            member_amount = round((member["total_km"] * KM_RATE) + member["total_parking"], 2)
+
             ml = ws.cell(row=row_cursor, column=1, value=member["member"])
             ml.fill = label_fill; ml.alignment = left; ml.border = border
 
@@ -168,17 +198,49 @@ def build_per_staff(records) -> bytes:
 
             pk = ws.cell(row=row_cursor, column=3, value=member["total_parking"])
             pk.fill = data_fill; pk.alignment = center; pk.border = border
+
+            am = ws.cell(row=row_cursor, column=4, value=member_amount)
+            am.fill = data_fill; am.alignment = center; am.border = border
+
             row_cursor += 1
 
-        for col, val in enumerate([("TOTAL", left, label_fill),
-                                    (staff_total_km, center, label_fill),
-                                    (staff_total_parking, center, label_fill)], start=1):
+        # Staff totals row
+        for col, val in enumerate([
+            ("TOTAL", left,   total_fill),
+            (staff_total_km,      center, total_fill),
+            (staff_total_parking, center, total_fill),
+            (staff_total_amount,  center, total_fill),
+        ], start=1):
             v, align, fill = val
             c = ws.cell(row=row_cursor, column=col, value=v)
             c.font = Font(bold=True); c.fill = fill
             c.alignment = align; c.border = border
-        row_cursor += 2
+        row_cursor += 2  # spacer
 
+    # Grand total row
+    ws.merge_cells(start_row=row_cursor, start_column=1,
+                   end_row=row_cursor, end_column=4)
+    gt_label = ws.cell(row=row_cursor, column=1, value="GRAND TOTAL")
+    gt_label.font = grand_font; gt_label.fill = grand_fill
+    gt_label.alignment = center; gt_label.border = border
+    row_cursor += 1
+
+    grand_total_km      = round(grand_total_km, 2)
+    grand_total_parking = round(grand_total_parking, 2)
+    grand_total_amount  = round(grand_total_amount, 2)
+
+    for col, val in enumerate([
+        ("", left, grand_fill),
+        (grand_total_km,      center, grand_fill),
+        (grand_total_parking, center, grand_fill),
+        (grand_total_amount,  center, grand_fill),
+    ], start=1):
+        v, align, fill = val
+        c = ws.cell(row=row_cursor, column=col, value=v)
+        c.font = grand_font; c.fill = fill
+        c.alignment = align; c.border = border
+
+    # Auto-size columns
     for col in ws.columns:
         max_len = max((len(str(cell.value)) for cell in col if cell.value), default=10)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 4, 18)
@@ -188,6 +250,7 @@ def build_per_staff(records) -> bytes:
     return buf.getvalue()
 
 
+# ── UI ─────────────────────────────────────────────────────────────────────────
 uploaded_files = st.file_uploader(
     "Drop your CSV mileage files here",
     type="csv",
@@ -233,7 +296,7 @@ if uploaded_files:
 
         with col2:
             st.markdown("**👤 Per Staff**")
-            st.caption("One block per staff, members listed as rows")
+            st.caption("One block per staff, sorted by last name")
             per_staff_bytes = build_per_staff(records)
             st.download_button(
                 label="⬇️ Download Per-Staff Report",
