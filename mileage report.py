@@ -19,7 +19,7 @@ st.markdown("Upload all your CSV mileage files below, choose a report type, and 
 def parse_csv_content(content: str):
     lines = [l.rstrip() for l in content.strip().split("\n")]
     header_match = re.search(
-        r"Name:\s*(.+?),\s*Member:\s*(.+?),\s*Month/Year:\s*(.+)", lines[0]
+        r"Name:\s*(.+?)\s*,\s*Member:\s*(.+?)\s*,\s*Month/Year:\s*(.+)", lines[0]
     )
     if not header_match:
         return None
@@ -27,6 +27,19 @@ def parse_csv_content(content: str):
     staff_name  = header_match.group(1).strip()
     member_name = header_match.group(2).strip()
     month_year  = header_match.group(3).strip()
+
+    # If the CSV only stored a first name, scan every line for a fuller version
+    # of that name (e.g. a "Staff:" or "Employee:" field anywhere in the file).
+    # Fall back to whatever was in the header if nothing better is found.
+    for line in lines[1:]:
+        full_name_match = re.search(
+            r"(?:Staff|Employee|Full Name|Worker):\s*([A-Za-z]+(?:\s+[A-Za-z]+)+)", line, re.IGNORECASE
+        )
+        if full_name_match:
+            candidate = full_name_match.group(1).strip()
+            if candidate.lower().startswith(staff_name.lower().split()[0]):
+                staff_name = candidate
+                break
 
     total_km = 0.0
     total_parking = 0.0
@@ -52,14 +65,20 @@ def parse_csv_content(content: str):
             except Exception:
                 pass
 
-    return {"staff": staff_name, "member": member_name,
-            "month_year": month_year,
-            "total_km": round(total_km, 2),
-            "total_parking": round(total_parking, 2)}
+    # Composite unique key: "<full name>||<member>" prevents same-first-name collisions
+    unique_staff_key = f"{staff_name}||{member_name}"
+
+    return {
+        "staff":         staff_name,
+        "staff_key":     unique_staff_key,
+        "member":        member_name,
+        "month_year":    month_year,
+        "total_km":      round(total_km, 2),
+        "total_parking": round(total_parking, 2),
+    }
 
 
 def last_name_key(name: str) -> str:
-    """Return the last word of a name for sorting purposes."""
     parts = name.strip().split()
     return parts[-1].lower() if parts else name.lower()
 
@@ -89,6 +108,15 @@ def build_per_member(records) -> bytes:
 
     row_cursor = 1
     for idx, (member_name, staff_list) in enumerate(sorted(members.items()), start=1):
+        # De-duplicate staff within this member block by staff_key
+        seen_keys = set()
+        unique_staff = []
+        for s in staff_list:
+            if s["staff_key"] not in seen_keys:
+                seen_keys.add(s["staff_key"])
+                unique_staff.append(s)
+        staff_list = unique_staff
+
         num_staff = len(staff_list)
         member_total_km      = round(sum(s["total_km"]      for s in staff_list), 2)
         member_total_parking = round(sum(s["total_parking"] for s in staff_list), 2)
@@ -134,9 +162,10 @@ def build_per_member(records) -> bytes:
 
 
 def build_per_staff(records) -> bytes:
+    # Group by staff_key (full name + member) — NOT just the display name
     staff_map = defaultdict(list)
     for r in records:
-        staff_map[r["staff"]].append(r)
+        staff_map[r["staff_key"]].append(r)
 
     wb = Workbook()
     ws = wb.active
@@ -152,16 +181,20 @@ def build_per_staff(records) -> bytes:
     grand_font   = Font(bold=True, size=11, color="FFFFFF")
     border, center, left = make_styles()
 
-    # Sort staff by last name ascending
-    sorted_staff = sorted(staff_map.items(), key=lambda x: last_name_key(x[0]))
+    # Sort by last name using the display name from the records
+    sorted_staff = sorted(
+        staff_map.items(),
+        key=lambda x: last_name_key(x[1][0]["staff"])
+    )
 
     grand_total_km      = 0.0
     grand_total_parking = 0.0
     grand_total_amount  = 0.0
-
     row_cursor = 1
 
-    for idx, (staff_name, members) in enumerate(sorted_staff, start=1):
+    for idx, (staff_key, members) in enumerate(sorted_staff, start=1):
+        staff_name = members[0]["staff"]
+
         staff_total_km      = round(sum(m["total_km"]      for m in members), 2)
         staff_total_parking = round(sum(m["total_parking"] for m in members), 2)
         staff_total_amount  = round((staff_total_km * KM_RATE) + staff_total_parking, 2)
@@ -170,7 +203,6 @@ def build_per_staff(records) -> bytes:
         grand_total_parking += staff_total_parking
         grand_total_amount  += staff_total_amount
 
-        # Staff header row
         ws.merge_cells(start_row=row_cursor, start_column=1,
                        end_row=row_cursor, end_column=4)
         cell = ws.cell(row=row_cursor, column=1,
@@ -179,14 +211,12 @@ def build_per_staff(records) -> bytes:
         cell.alignment = center; cell.border = border
         row_cursor += 1
 
-        # Column headers: Member | Total KMs | Parking ($) | Amount ($)
         for col, h in enumerate(["Member", "Total KMs", "Parking ($)", "Amount ($)"], start=1):
             c = ws.cell(row=row_cursor, column=col, value=h)
             c.font = Font(bold=True, size=10, color="FFFFFF")
             c.fill = col_fill; c.alignment = center; c.border = border
         row_cursor += 1
 
-        # One row per member
         for member in sorted(members, key=lambda x: x["member"]):
             member_amount = round((member["total_km"] * KM_RATE) + member["total_parking"], 2)
 
@@ -204,9 +234,8 @@ def build_per_staff(records) -> bytes:
 
             row_cursor += 1
 
-        # Staff totals row
         for col, val in enumerate([
-            ("TOTAL", left,   total_fill),
+            ("TOTAL",             left,   total_fill),
             (staff_total_km,      center, total_fill),
             (staff_total_parking, center, total_fill),
             (staff_total_amount,  center, total_fill),
@@ -215,7 +244,7 @@ def build_per_staff(records) -> bytes:
             c = ws.cell(row=row_cursor, column=col, value=v)
             c.font = Font(bold=True); c.fill = fill
             c.alignment = align; c.border = border
-        row_cursor += 2  # spacer
+        row_cursor += 2
 
     # Grand total row
     ws.merge_cells(start_row=row_cursor, start_column=1,
@@ -230,7 +259,7 @@ def build_per_staff(records) -> bytes:
     grand_total_amount  = round(grand_total_amount, 2)
 
     for col, val in enumerate([
-        ("", left, grand_fill),
+        ("",                  left,   grand_fill),
         (grand_total_km,      center, grand_fill),
         (grand_total_parking, center, grand_fill),
         (grand_total_amount,  center, grand_fill),
@@ -240,7 +269,6 @@ def build_per_staff(records) -> bytes:
         c.font = grand_font; c.fill = fill
         c.alignment = align; c.border = border
 
-    # Auto-size columns
     for col in ws.columns:
         max_len = max((len(str(cell.value)) for cell in col if cell.value), default=10)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 4, 18)
