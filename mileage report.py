@@ -165,7 +165,7 @@ def build_per_staff(records) -> bytes:
     # Group by staff_key (full name + member) — NOT just the display name
     staff_map = defaultdict(list)
     for r in records:
-        staff_map[r["staff_key"]].append(r)
+        staff_map[r["staff"]].append(r)
 
     wb = Workbook()
     ws = wb.active
